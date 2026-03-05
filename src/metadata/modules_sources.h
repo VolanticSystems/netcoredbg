@@ -65,8 +65,9 @@ struct method_data_t
 
     bool NestedInto(const method_data_t &other) const
     {
-        assert(startLine != other.startLine || startColumn != other.startColumn);
-        assert(endLine != other.endLine || endColumn != other.endColumn);
+        // Assertions removed: NinjaTrader's compiled PDB can have methods with
+        // identical start/end positions (e.g., partial classes, generated code).
+        // The logic below still works correctly without the precondition.
 
         return (startLine > other.startLine || (startLine == other.startLine && startColumn > other.startColumn)) &&
             (endLine < other.endLine || (endLine == other.endLine && endColumn < other.endColumn));

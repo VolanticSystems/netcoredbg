@@ -58,6 +58,10 @@
 #include "debugger/sigaction.h"
 #endif // INTEROP_DEBUGGING
 
+#ifdef WIN32
+#include "debugger/desktopclr.h"
+#endif
+
 #include "palclr.h"
 
 namespace netcoredbg
@@ -209,6 +213,9 @@ ManagedDebuggerBase::ManagedDebuggerBase(IProtocol *pProtocol_) :
     m_interopDebugging(false),
     m_unregisterToken(nullptr),
     m_processId(0),
+#ifdef WIN32
+    m_clrType(CLRType::Unknown),
+#endif
     m_ioredirect(
         { IOSystem::unnamed_pipe(), IOSystem::unnamed_pipe(), IOSystem::unnamed_pipe() },
         std::bind(&ManagedDebugger::InputCallback, this, std::placeholders::_1, std::placeholders::_2)
@@ -557,6 +564,10 @@ HRESULT ManagedDebuggerHelpers::Startup(IUnknown *punk)
     ToRelease<ICorDebug> iCorDebug;
     IfFailRet(punk->QueryInterface(IID_ICorDebug, (void **)&iCorDebug));
 
+    // CLR 2.0 (v2.0.50727) requires COM to be initialized before ICorDebug::Initialize().
+    // CLR 4.0+ handles this internally, but we call it unconditionally for safety.
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
     IfFailRet(iCorDebug->Initialize());
 
     if (m_clrPath.empty())
@@ -704,6 +715,15 @@ HRESULT ManagedDebuggerHelpers::RunProcess(const std::string& fileExec, const st
 
     m_clrPath.clear();
 
+#ifdef WIN32
+    // Check if the target is a .NET Framework executable
+    if (IsFrameworkExecutable(fileExec))
+    {
+        LOGI("Detected .NET Framework executable: %s", fileExec.c_str());
+        return RunFrameworkProcess(fileExec, execArgs, ss.str());
+    }
+#endif // WIN32
+
     HANDLE resumeHandle = 0; // Fake thread handle for the process resume
 
 #ifdef INTEROP_DEBUGGING
@@ -759,6 +779,98 @@ HRESULT ManagedDebuggerHelpers::RunProcess(const std::string& fileExec, const st
 
     return S_OK;
 }
+
+#ifdef WIN32
+HRESULT ManagedDebuggerHelpers::RunFrameworkProcess(const std::string& fileExec, const std::vector<std::string>& execArgs, const std::string& cmdLine)
+{
+    HRESULT Status;
+
+    m_clrType = CLRType::DesktopCLR;
+
+    // Set the CLR path to the known Framework location
+    m_clrPath = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\clr.dll";
+
+    // Get ICorDebug for .NET Framework v4.0 (before process creation)
+    ICorDebug *pCorDebug = nullptr;
+    IfFailRet(CreateDesktopCLRDebuggingInterfaceForLaunch(&pCorDebug));
+
+    IfFailRet(pCorDebug->Initialize());
+
+    m_sharedCallbacksQueue.reset(new CallbacksQueue(*this));
+    m_uniqueManagedCallback.reset(new ManagedCallback(*this, m_sharedCallbacksQueue));
+    Status = pCorDebug->SetManagedHandler(m_uniqueManagedCallback.get());
+    if (FAILED(Status))
+    {
+        pCorDebug->Terminate();
+        pCorDebug->Release();
+        m_uniqueManagedCallback.reset();
+        m_sharedCallbacksQueue.reset();
+        return Status;
+    }
+
+    // Set working directory
+    if (!m_cwd.empty())
+    {
+        if (!IsDirExists(m_cwd.c_str()) || !SetWorkDir(m_cwd))
+            m_cwd.clear();
+    }
+
+    // Use ICorDebug::CreateProcess to launch under the debugger
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+
+    std::wstring wExe = to_utf16(fileExec);
+    std::wstring wCmdLine = to_utf16(cmdLine);
+    std::wstring wCwd = m_cwd.empty() ? std::wstring() : to_utf16(m_cwd);
+
+    ToRelease<ICorDebugProcess> iCorProcess;
+    Status = pCorDebug->CreateProcess(
+        wExe.c_str(),                   // lpApplicationName
+        &wCmdLine[0],                   // lpCommandLine
+        NULL,                           // lpProcessAttributes
+        NULL,                           // lpThreadAttributes
+        FALSE,                          // bInheritHandles
+        0,                              // dwCreationFlags
+        NULL,                           // lpEnvironment
+        wCwd.empty() ? NULL : wCwd.c_str(), // lpCurrentDirectory
+        &si,                            // lpStartupInfo
+        &pi,                            // lpProcessInformation
+        DEBUG_NO_SPECIAL_OPTIONS,       // debuggingFlags
+        &iCorProcess                    // ppProcess
+    );
+
+    if (FAILED(Status))
+    {
+        LOGE("ICorDebug::CreateProcess failed for '%s': 0x%08x", fileExec.c_str(), Status);
+        pCorDebug->Terminate();
+        pCorDebug->Release();
+        m_uniqueManagedCallback.reset();
+        m_sharedCallbacksQueue.reset();
+        return Status;
+    }
+
+    m_processId = pi.dwProcessId;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    {
+        std::unique_lock<Utility::RWLock::Writer> lockProcessRWLock(m_debugProcessRWLock.writer);
+        m_iCorProcess = iCorProcess.Detach();
+        m_iCorDebug = pCorDebug; // Transfer ownership
+    }
+
+    m_unregisterToken = nullptr;
+
+    std::unique_lock<std::mutex> lockAttachedMutex(m_processAttachedMutex);
+    if (!m_processAttachedCV.wait_for(lockAttachedMutex, startupWaitTimeout, [this]{return m_processAttachedState == ProcessAttachedState::Attached;}))
+        return E_FAIL;
+
+    pProtocol->EmitExecEvent(PID{m_processId}, fileExec);
+
+    return S_OK;
+}
+#endif // WIN32
 
 HRESULT ManagedDebuggerBase::CheckNoProcess()
 {
@@ -870,6 +982,44 @@ HRESULT ManagedDebuggerHelpers::AttachToProcess()
 
     IfFailRet(CheckNoProcess());
 
+#ifdef WIN32
+    // Detect CLR type: Desktop (.NET Framework) vs CoreCLR (.NET Core/5+)
+    m_clrType = DetectCLRType(m_processId);
+
+    if (m_clrType == CLRType::DesktopCLR)
+    {
+        LOGI("Detected .NET Framework (Desktop CLR) in process %u", m_processId);
+
+        m_clrPath = GetDesktopCLRPath(m_processId);
+        if (m_clrPath.empty())
+        {
+            LOGE("Unable to find clr.dll in process %u", m_processId);
+            return E_INVALIDARG;
+        }
+
+        // Use mscoree/ICLRMetaHost path to get ICorDebug
+        ICorDebug *pCorDebug = nullptr;
+        IfFailRet(CreateDesktopCLRDebuggingInterface(m_processId, &pCorDebug));
+
+        // Startup expects IUnknown* and will QI for ICorDebug internally.
+        // ICorDebug inherits from IUnknown, so this cast is safe.
+        m_unregisterToken = nullptr;
+        Status = Startup(pCorDebug);
+        pCorDebug->Release();
+        IfFailRet(Status);
+
+        std::unique_lock<std::mutex> lockAttachedMutex(m_processAttachedMutex);
+        if (!m_processAttachedCV.wait_for(lockAttachedMutex, startupWaitTimeout, [this]{return m_processAttachedState == ProcessAttachedState::Attached;}))
+            return E_FAIL;
+
+        return S_OK;
+    }
+
+    if (m_clrType == CLRType::Unknown)
+        LOGW("Could not detect CLR type for process %u, trying CoreCLR path", m_processId);
+#endif // WIN32
+
+    // Original CoreCLR path via dbgshim
     m_clrPath = GetCLRPath(m_dbgshim, m_processId);
     if (m_clrPath.empty())
         return E_INVALIDARG; // Unable to find libcoreclr.so

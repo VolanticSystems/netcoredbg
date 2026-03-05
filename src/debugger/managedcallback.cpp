@@ -154,7 +154,36 @@ HRESULT STDMETHODCALLTYPE ManagedCallback::CreateProcess(ICorDebugProcess *pProc
 
     // ManagedPart must be initialized only once for process, since CoreCLR don't support unload and reinit
     // for global variables. coreclr_shutdown only should be called on process exit.
+#ifdef WIN32
+    if (m_debugger.m_clrType != CLRType::DesktopCLR)
+    {
+        Interop::Init(m_debugger.m_clrPath);
+    }
+    else
+    {
+        // Desktop CLR: we need a CoreCLR to host ManagedPart.dll for symbol loading.
+        // Find a system-installed CoreCLR instead of using the target's clr.dll.
+        std::string hostingClrPath = FindHostingCoreCLRPath();
+        if (!hostingClrPath.empty())
+        {
+            LOGI("Desktop CLR: Using CoreCLR at %s for ManagedPart hosting", hostingClrPath.c_str());
+            try
+            {
+                Interop::Init(hostingClrPath);
+            }
+            catch (const std::exception &e)
+            {
+                LOGW("Desktop CLR: Interop::Init failed: %s. Symbol loading unavailable.", e.what());
+            }
+        }
+        else
+        {
+            LOGW("Desktop CLR: No CoreCLR found for ManagedPart hosting. Symbol loading and expression evaluation unavailable.");
+        }
+    }
+#else
     Interop::Init(m_debugger.m_clrPath);
+#endif
 
 #ifdef INTEROP_DEBUGGING
     // Note, in case `attach` CoreCLR also call CreateProcess() that call this method.
@@ -215,6 +244,10 @@ HRESULT STDMETHODCALLTYPE ManagedCallback::CreateProcess(ICorDebugProcess *pProc
         }
     }
 
+    // CLR 2.0 (.NET Framework 2.0/3.5) may not have any AppDomains created yet during
+    // CreateProcess callback. In that case, notify process created directly so the attach
+    // flow doesn't hang waiting for the state change.
+    m_debugger.NotifyProcessCreated();
     return m_sharedCallbacksQueue->ContinueProcess(pProcess);
 }
 
@@ -380,6 +413,11 @@ HRESULT STDMETHODCALLTYPE ManagedCallback::LogSwitch(ICorDebugAppDomain *pAppDom
 HRESULT STDMETHODCALLTYPE ManagedCallback::CreateAppDomain(ICorDebugProcess *pProcess, ICorDebugAppDomain *pAppDomain)
 {
     LogFuncEntry();
+
+    // CLR 2.0 requires Attach() on the AppDomain to receive LoadModule/CreateThread callbacks.
+    // CLR 4.0+ handles this automatically, but calling Attach() is harmless on newer CLR versions.
+    pAppDomain->Attach();
+
     return m_sharedCallbacksQueue->ContinueProcess(pProcess);
 }
 

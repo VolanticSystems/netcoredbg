@@ -1245,12 +1245,19 @@ namespace NetCoreDbg
                 if (entry.Type == DebugDirectoryEntryType.CodeView)
                 {
                     const ushort PortableCodeViewVersionMagic = 0x504d;
-                    if (entry.MinorVersion != PortableCodeViewVersionMagic)
+                    if (entry.MinorVersion == PortableCodeViewVersionMagic)
                     {
-                        continue;
+                        // Portable PDB CodeView entry — always preferred
+                        codeViewEntry = entry;
                     }
-
-                    codeViewEntry = entry;
+                    else if (codeViewEntry.DataSize == 0)
+                    {
+                        // Non-portable (Windows PDB) CodeView entry — use as fallback.
+                        // The PDB file on disk may have been converted to portable format
+                        // (e.g., via Pdb2Pdb) while the DLL retains its original CodeView entry.
+                        // TryOpenReaderFromCodeView will validate the PDB format.
+                        codeViewEntry = entry;
+                    }
                 }
                 else if (entry.Type == DebugDirectoryEntryType.EmbeddedPortablePdb)
                 {
@@ -1315,6 +1322,14 @@ namespace NetCoreDbg
                 // Validate that the PDB matches the assembly version
                 if (data.Age == 1 && new BlobContentId(reader.DebugMetadataHeader.Id) == new BlobContentId(data.Guid, codeViewEntry.Stamp))
                 {
+                    result = new OpenedReader(provider, reader);
+                }
+                else
+                {
+                    // Fallback: accept a valid portable PDB even if GUID/Age don't match.
+                    // This handles the case where a Windows PDB was converted to portable
+                    // format (e.g., via Pdb2Pdb) — the DLL's CodeView entry retains the
+                    // original Windows PDB signature which won't match the converted PDB.
                     result = new OpenedReader(provider, reader);
                 }
             }

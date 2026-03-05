@@ -192,6 +192,10 @@ if (NOT CLR_CMAKE_TARGET_TIZEN_LINUX)
     list(APPEND netcoredbg_SRC utils/logger.cpp)
 endif()
 
+if (WIN32)
+    list(APPEND netcoredbg_SRC debugger/desktopclr.cpp)
+endif()
+
 if (INTEROP_DEBUGGING)
     list(APPEND netcoredbg_SRC
             debugger/breakpoint_interop_rendezvous.cpp
@@ -236,7 +240,21 @@ add_custom_target(buildinfo ALL COMMAND
 add_executable(netcoredbg ${netcoredbg_SRC})
 
 if (WIN32)
-    target_link_libraries(netcoredbg corguids wsock32 ws2_32 linenoise)
+    # .NET Framework 4.8 desktop CLR debugging support
+    set(NETFXSDK_DIR "C:/Program Files (x86)/Windows Kits/NETFXSDK/4.8")
+    if (EXISTS "${NETFXSDK_DIR}/Include/um/metahost.h")
+        target_include_directories(netcoredbg PRIVATE "${NETFXSDK_DIR}/Include/um")
+        if ("${CLR_CMAKE_HOST_ARCH}" STREQUAL "x86" OR "${CLR_CMAKE_HOST_ARCH}" STREQUAL "I386")
+            target_link_directories(netcoredbg PRIVATE "${NETFXSDK_DIR}/Lib/um/x86")
+        else()
+            target_link_directories(netcoredbg PRIVATE "${NETFXSDK_DIR}/Lib/um/x64")
+        endif()
+        target_link_libraries(netcoredbg corguids wsock32 ws2_32 linenoise mscoree)
+        message(STATUS "Desktop CLR support enabled (NETFXSDK found at ${NETFXSDK_DIR})")
+    else()
+        message(STATUS "Desktop CLR support disabled (NETFXSDK not found)")
+        target_link_libraries(netcoredbg corguids wsock32 ws2_32 linenoise)
+    endif()
 else()
     target_link_libraries(netcoredbg corguids dl pthread linenoise)
     if (EXISTS "${CORECLR_MINIPAL_SRC_DIR}/guid.c")

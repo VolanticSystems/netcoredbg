@@ -11,6 +11,9 @@
 #include <set>
 #include "interfaces/idebugger.h"
 #include "debugger/dbgshim.h"
+#ifdef WIN32
+#include "debugger/desktopclr.h"
+#endif
 #include "debugger/interop_debugging.h"
 #include "utils/string_view.h"
 #include "utils/span.h"
@@ -108,6 +111,9 @@ protected:
     DWORD m_processId;
     std::string m_clrPath;
     dbgshim_t m_dbgshim;
+#ifdef WIN32
+    CLRType m_clrType;
+#endif
 
     IORedirectHelper m_ioredirect;
 
@@ -143,6 +149,9 @@ protected:
     HRESULT Startup(IUnknown *punk);
     HRESULT RunIfReady();
     HRESULT RunProcess(const std::string& fileExec, const std::vector<std::string>& execArgs);
+#ifdef WIN32
+    HRESULT RunFrameworkProcess(const std::string& fileExec, const std::vector<std::string>& execArgs, const std::string& cmdLine);
+#endif
     HRESULT AttachToProcess();
     HRESULT DetachFromProcess();
     HRESULT TerminateProcess();

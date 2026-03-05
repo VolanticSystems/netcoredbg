@@ -1,3 +1,24 @@
+# netcoredbg — Fork with .NET Framework Support
+
+> **This is a fork of [Samsung/netcoredbg](https://github.com/Samsung/netcoredbg)** that adds .NET Framework CLR 2.0 and CLR 4.0 debugging support (Windows only).
+>
+> Stock netcoredbg only supports .NET Core / .NET 5+. This fork extends it to debug .NET Framework processes such as NinjaTrader 7 (CLR 2.0) and NinjaTrader 8 (CLR 4.0 / .NET Framework 4.8).
+>
+> **What this fork adds:**
+> - Desktop CLR discovery and attach via `mscoree.dll` / `ICLRMetaHost` (CLR 4.0) and `mscorwks.dll` (CLR 2.0)
+> - Launch support for .NET Framework executables (auto-detected via PE header CLR data directory)
+> - `AppDomain::Attach()` call for CLR 2.0 compatibility (required for LoadModule/CreateThread callbacks)
+> - `CoInitializeEx` before `ICorDebug::Initialize()` (required by CLR 2.0)
+> - System CoreCLR hosting for `ManagedPart.dll` when debugging desktop CLR targets
+> - PDB loading fallback for Windows-format PDBs converted to Portable PDB format
+> - Relaxed assertion in `modules_sources.h` for NinjaTrader-compiled PDBs with overlapping method ranges
+>
+> All changes are `#ifdef WIN32` guarded. Linux/macOS builds are unaffected. See [DOTNET_FRAMEWORK_SUPPORT.md](DOTNET_FRAMEWORK_SUPPORT.md) for details.
+
+---
+
+*Original README follows:*
+
 # Debugger for the .NET Core Runtime
 
 The NetCoreDbg debugger implements [GDB/MI](https://sourceware.org/gdb/onlinedocs/gdb/GDB_002fMI.html)
