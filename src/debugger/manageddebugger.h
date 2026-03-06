@@ -173,7 +173,7 @@ public:
 #endif
 
     HRESULT Initialize() override;
-    HRESULT Attach(int pid) override;
+    HRESULT Attach(int pid, bool stopOnEntry = false) override;
     HRESULT Launch(const std::string &fileExec, const std::vector<std::string> &execArgs, const std::map<std::string, std::string> &env,
                    const std::string &cwd, bool stopAtEntry = false) override;
     HRESULT ConfigurationDone() override;

@@ -26,6 +26,7 @@ public:
     {}
 
     void SetStopAtEntry(bool enable) { m_stopAtEntry = enable; }
+    bool IsStopAtEntry() const { return m_stopAtEntry; }
     void Delete();
 
     // Important! Must provide succeeded return code:

@@ -1291,6 +1291,28 @@ namespace NetCoreDbg
                 var pdbStream = TryOpenFile(pdbPath);
                 if (pdbStream == null && assemblyPath != null)
                 {
+                    // Fallback: try original CodeView path as-is
+                    pdbStream = TryOpenFile(data.Path);
+                }
+                if (pdbStream == null && assemblyPath != null)
+                {
+                    // Fallback: try assemblyName.pdb alongside the DLL
+                    // .NET Framework compilers may write PDB to a temp dir but the user
+                    // may have copied/renamed it to match the assembly name.
+                    try
+                    {
+                        string assemblyPdbPath = Path.ChangeExtension(assemblyPath, ".pdb");
+                        pdbStream = TryOpenFile(assemblyPdbPath);
+                        if (pdbStream != null)
+                            pdbPath = assemblyPdbPath;
+                    }
+                    catch
+                    {
+                        // invalid characters in path
+                    }
+                }
+                if (pdbStream == null && assemblyPath != null)
+                {
                     // workaround, since NI file could be generated in `.native_image` subdirectory
                     // NOTE this is temporary solution until we add option for specifying pdb path
                     try
@@ -1314,6 +1336,33 @@ namespace NetCoreDbg
                 if (pdbStream == null)
                 {
                     return null;
+                }
+
+                // Check if this is a Windows PDB (not Portable) by reading magic bytes.
+                // Windows PDBs start with "Microsoft C/C++ MSF 7.00\r\n\x1a\x44\x53"
+                // Portable PDBs have "BSJB" at the metadata root.
+                byte[] magic = new byte[32];
+                int bytesRead = pdbStream.Read(magic, 0, magic.Length);
+                pdbStream.Position = 0; // Reset for FromPortablePdbStream
+
+                if (bytesRead >= 29 && System.Text.Encoding.ASCII.GetString(magic, 0, 24) == "Microsoft C/C++ MSF 7.00")
+                {
+                    // Windows PDB detected — auto-convert to Portable PDB in-memory.
+                    try
+                    {
+                        var portableStream = new MemoryStream();
+                        var converter = new Microsoft.DiaSymReader.Tools.PdbConverter();
+                        converter.ConvertWindowsToPortable(peReader, pdbStream, portableStream);
+                        portableStream.Position = 0;
+                        pdbStream.Dispose();
+                        pdbStream = portableStream;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine("WARNING: Failed to convert Windows PDB '" + pdbPath + "': " + ex.Message);
+                        pdbStream.Dispose();
+                        return null;
+                    }
                 }
 
                 provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);

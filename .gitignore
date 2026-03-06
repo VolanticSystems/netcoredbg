@@ -1,5 +1,9 @@
 # Proposed build directory according to README
 /build/
+/build-*/
+/install-*/
+/bin-*/
+/test-apps/
 
 # Visual Studio Code
 /.vscode/
@@ -10,6 +14,7 @@
 # Qt Creator files
 CMakeLists.txt.user
 *.config
+!NuGet.config
 *.creator
 *.files
 *.includes

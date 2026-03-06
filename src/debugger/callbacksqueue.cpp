@@ -4,9 +4,11 @@
 
 #ifdef _MSC_VER
 #include <wtypes.h>
+#include <objbase.h>
 #endif
 
 #include "debugger/callbacksqueue.h"
+#include "utils/logger.h"
 #include "debugger/threads.h"
 #include "debugger/evalwaiter.h"
 #include "debugger/breakpoints.h"
@@ -47,14 +49,48 @@ bool CallbacksQueue::CallbacksWorkerBreakpoint(ICorDebugAppDomain *pAppDomain, I
         event.reason = StopEntry;
 
     ToRelease<ICorDebugFrame> pFrame;
-    if (SUCCEEDED(pThread->GetActiveFrame(&pFrame)) && pFrame != nullptr)
+    bool hasFrame = SUCCEEDED(pThread->GetActiveFrame(&pFrame)) && pFrame != nullptr;
+    if (hasFrame)
         m_debugger.GetFrameLocation(pFrame, threadId, FrameLevel(0), event.frame);
+
+    // If this is an entry stop (attach) and the breaking thread has no managed frame,
+    // search all threads for one with a managed stack frame (CLR 2.0 often breaks
+    // on a native thread during attach).
+    bool switchedThread = false;
+    if (atEntry && event.frame.source.IsNull())
+    {
+        std::vector<Thread> threads;
+        m_debugger.GetThreads(threads);
+        for (const Thread& t : threads)
+        {
+            if (t.id == threadId)
+                continue;
+            int totalFrames = 0;
+            std::vector<StackFrame> stackFrames;
+            if (SUCCEEDED(m_debugger.GetStackTrace(t.id, FrameLevel(0), 1, stackFrames, totalFrames)) && !stackFrames.empty())
+            {
+                if (!stackFrames[0].source.IsNull())
+                {
+                    event.threadId = t.id;
+                    event.frame = stackFrames[0];
+                    threadId = t.id;
+                    switchedThread = true;
+                    break;
+                }
+            }
+        }
+    }
 
 #ifdef INTEROP_DEBUGGING
     StopAllNativeThreads();
 #endif // INTEROP_DEBUGGING
 
-    m_debugger.SetLastStoppedThread(pThread);
+    // If we switched to a different thread (attach entry on CLR 2.0),
+    // set that thread as last stopped instead of the original native thread.
+    if (switchedThread)
+        m_debugger.SetLastStoppedThreadId(threadId);
+    else
+        m_debugger.SetLastStoppedThread(pThread);
     for (const BreakpointEvent &changeEvent : bpChangeEvents)
     {
         std::ostringstream ss;
@@ -383,7 +419,26 @@ HRESULT CallbacksQueue::Pause(ICorDebugProcess *pProcess, ThreadId lastStoppedTh
 
     // Note, in case Stop() failed, no stop event will be emitted, don't set m_stopEventInProcess to "true" in this case.
     HRESULT Status;
-    IfFailRet(InternalStop(pProcess, m_stopEventInProcess));
+    Status = InternalStop(pProcess, m_stopEventInProcess);
+    if (FAILED(Status) && !m_stopEventInProcess)
+    {
+        // Fallback 1: Non-zero timeout (CLR 2.0 may reject timeout=0)
+        LOGW("Stop(0) failed: 0x%08x, retrying with timeout", Status);
+        Status = pProcess->Stop(5000);
+        if (SUCCEEDED(Status)) { m_stopEventInProcess = true; Status = S_OK; }
+    }
+#ifdef _MSC_VER
+    if (FAILED(Status) && !m_stopEventInProcess)
+    {
+        // Fallback 2: Ensure COM initialized on this thread, then retry
+        LOGW("Stop(5000) failed: 0x%08x, trying with CoInitializeEx", Status);
+        CoInitializeEx(NULL, COINIT_MULTITHREADED);
+        Status = pProcess->Stop(5000);
+        if (SUCCEEDED(Status)) { m_stopEventInProcess = true; Status = S_OK; }
+    }
+#endif
+    if (FAILED(Status))
+        return Status;
     if (Status == S_FALSE) // Already stopped.
         return S_OK;
 
@@ -409,6 +464,60 @@ HRESULT CallbacksQueue::Pause(ICorDebugProcess *pProcess, ThreadId lastStoppedTh
             // VSCode protocol event must provide thread only (VSCode count on this), even if this thread don't have user code.
             m_debugger.SetLastStoppedThreadId(lastStoppedThread);
             m_debugger.pProtocol->EmitStoppedEvent(StoppedEvent(StopPause, lastStoppedThread));
+            m_debugger.m_ioredirect.async_cancel();
+            return S_OK;
+        }
+    }
+    else if (eventFormat == EventFormat::Default)
+    {
+        // VSCode/DAP and MI with AllThreads: find a thread with a stack frame that has valid source.
+        for (const Thread& thread : threads)
+        {
+            int totalFrames = 0;
+            std::vector<StackFrame> stackFrames;
+
+            if (FAILED(m_debugger.GetStackTrace(thread.id, FrameLevel(0), 0, stackFrames, totalFrames)))
+                continue;
+
+            for (const StackFrame& stackFrame : stackFrames)
+            {
+                if (stackFrame.source.IsNull())
+                    continue;
+
+                m_debugger.SetLastStoppedThreadId(thread.id);
+                StoppedEvent event(StopPause, thread.id);
+                event.frame = stackFrame;
+                m_debugger.pProtocol->EmitStoppedEvent(event);
+                m_debugger.m_ioredirect.async_cancel();
+                return S_OK;
+            }
+        }
+        // No thread with source — try any thread with managed (CLR) frames.
+        for (const Thread& thread : threads)
+        {
+            int totalFrames = 0;
+            std::vector<StackFrame> stackFrames;
+            if (FAILED(m_debugger.GetStackTrace(thread.id, FrameLevel(0), 0, stackFrames, totalFrames)))
+                continue;
+
+            for (const StackFrame& stackFrame : stackFrames)
+            {
+                if (stackFrame.clrAddr.IsNull())
+                    continue;
+
+                m_debugger.SetLastStoppedThreadId(thread.id);
+                StoppedEvent event(StopPause, thread.id);
+                event.frame = stackFrame;
+                m_debugger.pProtocol->EmitStoppedEvent(event);
+                m_debugger.m_ioredirect.async_cancel();
+                return S_OK;
+            }
+        }
+        // Last resort — use first thread (DAP requires a stopped event).
+        if (!threads.empty())
+        {
+            m_debugger.SetLastStoppedThreadId(threads[0].id);
+            m_debugger.pProtocol->EmitStoppedEvent(StoppedEvent(StopPause, threads[0].id));
             m_debugger.m_ioredirect.async_cancel();
             return S_OK;
         }

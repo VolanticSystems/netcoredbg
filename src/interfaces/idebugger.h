@@ -73,7 +73,7 @@ public:
     virtual void SetInteropDebugging(bool enable) = 0;
 #endif
     virtual HRESULT Initialize() = 0;
-    virtual HRESULT Attach(int pid) = 0;
+    virtual HRESULT Attach(int pid, bool stopOnEntry = false) = 0;
     virtual HRESULT Launch(const std::string &fileExec, const std::vector<std::string> &execArgs, const std::map<std::string, std::string> &env,
         const std::string &cwd, bool stopAtEntry = false) = 0;
     virtual HRESULT ConfigurationDone() = 0;

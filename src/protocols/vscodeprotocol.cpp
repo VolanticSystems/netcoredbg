@@ -671,7 +671,9 @@ static HRESULT HandleCommand(std::shared_ptr<IDebugger> &sharedDebugger, std::st
         return sharedDebugger->Continue(threadId);
     } },
     { "pause", [&](const json &arguments, json &body){
-        ThreadId threadId{int(arguments.at("threadId"))};
+        int rawThreadId = int(arguments.at("threadId"));
+        // DAP spec: threadId 0 means "pause all threads"
+        ThreadId threadId = (rawThreadId == 0) ? ThreadId::AllThreads : ThreadId{rawThreadId};
         body["threadId"] = int(threadId);
         return sharedDebugger->Pause(threadId, EventFormat::Default);
     } },
@@ -809,7 +811,12 @@ static HRESULT HandleCommand(std::shared_ptr<IDebugger> &sharedDebugger, std::st
         else
             return E_INVALIDARG;
 
-        return sharedDebugger->Attach(processId);
+        bool stopOnEntry = false;
+        auto it = arguments.find("stopOnEntry");
+        if (it != arguments.end() && it->is_boolean())
+            stopOnEntry = *it;
+
+        return sharedDebugger->Attach(processId, stopOnEntry);
     } },
     { "setVariable", [&](const json &arguments, json &body) {
         HRESULT Status;

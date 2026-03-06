@@ -234,12 +234,73 @@ static HRESULT UnwindInlinedTopNativeFrames(ICorDebugThread *pThread, ICorDebugF
 #endif // INTEROP_DEBUGGING
 
 // From https://github.com/SymbolSource/Microsoft.Samples.Debugging/blob/master/src/debugger/mdbgeng/FrameFactory.cs
+// Legacy stack walk for CLR 2.0 which lacks ICorDebugThread3/ICorDebugStackWalk.
+// Uses the older EnumerateChains/EnumerateFrames API.
+static HRESULT WalkFramesLegacy(ICorDebugThread *pThread, WalkFramesCallback cb)
+{
+    HRESULT Status;
+
+    ToRelease<ICorDebugChainEnum> pChainEnum;
+    IfFailRet(pThread->EnumerateChains(&pChainEnum));
+
+    ToRelease<ICorDebugChain> pChain;
+    ULONG chainsFetched = 0;
+    while (SUCCEEDED(pChainEnum->Next(1, &pChain, &chainsFetched)) && chainsFetched == 1)
+    {
+        BOOL isManaged = FALSE;
+        pChain->IsManaged(&isManaged);
+
+        if (isManaged)
+        {
+            ToRelease<ICorDebugFrameEnum> pFrameEnum;
+            if (SUCCEEDED(pChain->EnumerateFrames(&pFrameEnum)))
+            {
+                ToRelease<ICorDebugFrame> pFrame;
+                ULONG framesFetched = 0;
+                while (SUCCEEDED(pFrameEnum->Next(1, &pFrame, &framesFetched)) && framesFetched == 1)
+                {
+                    ToRelease<ICorDebugFunction> iCorFunction;
+                    if (SUCCEEDED(pFrame->GetFunction(&iCorFunction)))
+                    {
+                        ToRelease<ICorDebugILFrame> pILFrame;
+                        if (SUCCEEDED(pFrame->QueryInterface(IID_ICorDebugILFrame, (LPVOID*)&pILFrame)))
+                        {
+                            ULONG32 nOffset;
+                            CorDebugMappingResult mappingResult;
+                            if (SUCCEEDED(pILFrame->GetIP(&nOffset, &mappingResult)) &&
+                                mappingResult != MAPPING_UNMAPPED_ADDRESS &&
+                                mappingResult != MAPPING_NO_INFO)
+                            {
+                                IfFailRet(cb(FrameCLRManaged, 0, pFrame, nullptr));
+                            }
+                        }
+                    }
+                    pFrame.Free();
+                }
+            }
+        }
+        else
+        {
+            // Emit a single native frame marker for the unmanaged chain
+            IfFailRet(cb(FrameCLRNative, 0, nullptr, nullptr));
+        }
+        pChain.Free();
+    }
+
+    return S_OK;
+}
+
 HRESULT WalkFrames(ICorDebugThread *pThread, WalkFramesCallback cb)
 {
     HRESULT Status;
 
     ToRelease<ICorDebugThread3> iCorThread3;
-    IfFailRet(pThread->QueryInterface(IID_ICorDebugThread3, (LPVOID *) &iCorThread3));
+    Status = pThread->QueryInterface(IID_ICorDebugThread3, (LPVOID *) &iCorThread3);
+    if (FAILED(Status))
+    {
+        // CLR 2.0 does not support ICorDebugThread3 — use legacy chain/frame enumeration.
+        return WalkFramesLegacy(pThread, cb);
+    }
     ToRelease<ICorDebugStackWalk> iCorStackWalk;
     IfFailRet(iCorThread3->CreateStackWalk(&iCorStackWalk));
 

@@ -65,6 +65,11 @@ void Breakpoints::SetStopAtEntry(bool enable)
     m_uniqueEntryBreakpoint->SetStopAtEntry(enable);
 }
 
+bool Breakpoints::IsStopAtEntry() const
+{
+    return m_uniqueEntryBreakpoint->IsStopAtEntry();
+}
+
 HRESULT Breakpoints::ManagedCallbackBreak(ICorDebugThread *pThread, const ThreadId &lastStoppedThreadId)
 {
     return m_uniqueBreakBreakpoint->ManagedCallbackBreak(pThread, lastStoppedThreadId);

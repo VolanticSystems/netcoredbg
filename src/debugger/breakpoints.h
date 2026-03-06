@@ -46,6 +46,7 @@ public:
     void SetJustMyCode(bool enable);
     void SetLastStoppedIlOffset(ICorDebugProcess *pProcess, const ThreadId &lastStoppedThreadId);
     void SetStopAtEntry(bool enable);
+    bool IsStopAtEntry() const;
     void DeleteAllManaged();
     HRESULT DisableAllManaged(ICorDebugProcess *pProcess);
 

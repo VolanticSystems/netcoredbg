@@ -399,10 +399,27 @@ if (BUILD_MANAGED)
         Microsoft.CodeAnalysis.Scripting.dll
         Microsoft.CodeAnalysis.CSharp.Scripting.dll)
 
+    # DiaSymReader dlls for Windows PDB to Portable PDB conversion
+    if (WIN32)
+        set(DIASYMREADER_DLLS
+            Microsoft.DiaSymReader.Converter.dll
+            Microsoft.DiaSymReader.dll)
+        if (CLR_CMAKE_TARGET_ARCH STREQUAL "x86" OR CLR_CMAKE_TARGET_ARCH STREQUAL "i386")
+            list(APPEND DIASYMREADER_DLLS Microsoft.DiaSymReader.Native.x86.dll)
+        else()
+            list(APPEND DIASYMREADER_DLLS Microsoft.DiaSymReader.Native.amd64.dll)
+        endif()
+    endif()
+
     set(DLLS_TO_DEPLOY ${DOTNET_BUILD_RESULT})
     foreach(ITEM ${ROSLYN_DLLS})
         list(APPEND DLLS_TO_DEPLOY "${CMAKE_CURRENT_BINARY_DIR}/${ITEM}")
     endforeach()
+    if (WIN32)
+        foreach(ITEM ${DIASYMREADER_DLLS})
+            list(APPEND DLLS_TO_DEPLOY "${CMAKE_CURRENT_BINARY_DIR}/${ITEM}")
+        endforeach()
+    endif()
 
     install(FILES ${DLLS_TO_DEPLOY} DESTINATION ${CMAKE_INSTALL_PREFIX})
 

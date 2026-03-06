@@ -10,6 +10,7 @@
 #include <mutex>
 #include <memory>
 #include <chrono>
+#include <thread>
 #include <stdexcept>
 #include <vector>
 #include <map>
@@ -268,7 +269,20 @@ HRESULT ManagedDebuggerHelpers::RunIfReady()
         case StartLaunch:
             return RunProcess(m_execPath, m_execArgs);
         case StartAttach:
-            return AttachToProcess();
+        {
+            HRESULT hr = AttachToProcess();
+            if (SUCCEEDED(hr) && m_sharedBreakpoints->IsStopAtEntry())
+            {
+                // Defer Pause to allow module/thread enumeration to complete.
+                // AttachToProcess() returns with the process running; CLR callbacks
+                // for modules and threads arrive asynchronously on the callback thread.
+                std::thread([this]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    Pause(ThreadId::AllThreads, EventFormat::Default);
+                }).detach();
+            }
+            return hr;
+        }
         default:
             return E_FAIL;
     }
@@ -277,12 +291,14 @@ HRESULT ManagedDebuggerHelpers::RunIfReady()
     return E_FAIL;
 }
 
-HRESULT ManagedDebugger::Attach(int pid)
+HRESULT ManagedDebugger::Attach(int pid, bool stopOnEntry)
 {
     LogFuncEntry();
 
     m_startMethod = StartAttach;
     m_processId = pid;
+    if (stopOnEntry)
+        m_sharedBreakpoints->SetStopAtEntry(true);
     return RunIfReady();
 }
 
