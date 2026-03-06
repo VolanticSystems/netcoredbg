@@ -360,11 +360,12 @@ HRESULT AsyncStepper::DisableAllSteppers()
 HRESULT AsyncStepper::SetBreakpointIntoNotifyDebuggerOfWaitCompletion()
 {
     HRESULT Status = S_OK;
-    static const std::string assemblyName = "System.Private.CoreLib.dll";
     static const WCHAR className[] = W("System.Threading.Tasks.Task");
     static const WCHAR methodName[] = W("NotifyDebuggerOfWaitCompletion");
     ToRelease<ICorDebugFunction> pFunc;
-    IfFailRet(m_sharedEvalHelpers->FindMethodInModule(assemblyName, className, methodName, &pFunc));
+    Status = m_sharedEvalHelpers->FindMethodInModule("System.Private.CoreLib.dll", className, methodName, &pFunc);
+    if (FAILED(Status))
+        IfFailRet(m_sharedEvalHelpers->FindMethodInModule("mscorlib.dll", className, methodName, &pFunc));
 
     ToRelease<ICorDebugModule> pModule;
     IfFailRet(pFunc->GetModule(&pModule));

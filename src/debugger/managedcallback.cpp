@@ -341,7 +341,7 @@ HRESULT STDMETHODCALLTYPE ManagedCallback::LoadModule(ICorDebugAppDomain *pAppDo
     m_debugger.m_sharedBreakpoints->ManagedCallbackLoadModuleAll(pModule);
 
     // enable Debugger.NotifyOfCrossThreadDependency after System.Private.CoreLib.dll loaded (trigger for 1 time call only)
-    if (module.name == "System.Private.CoreLib.dll")
+    if (module.name == "System.Private.CoreLib.dll" || module.name == "mscorlib.dll")
     {
         m_debugger.m_sharedEvalWaiter->SetupCrossThreadDependencyNotificationClass(pModule);
         m_debugger.m_sharedEvalStackMachine->FindPredefinedTypes(pModule);

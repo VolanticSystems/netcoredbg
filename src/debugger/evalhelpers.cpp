@@ -366,10 +366,11 @@ HRESULT EvalHelpers::CreatTypeObjectStaticConstructor(
 
         if (!m_pSuppressFinalize)
         {
-            static const std::string assemblyName = "System.Private.CoreLib.dll";
             static const WCHAR gcName[] = W("System.GC");
             static const WCHAR suppressFinalizeMethodName[] = W("SuppressFinalize");
-            IfFailRet(FindMethodInModule(assemblyName, gcName, suppressFinalizeMethodName, &m_pSuppressFinalize));
+            Status = FindMethodInModule("System.Private.CoreLib.dll", gcName, suppressFinalizeMethodName, &m_pSuppressFinalize);
+            if (FAILED(Status))
+                IfFailRet(FindMethodInModule("mscorlib.dll", gcName, suppressFinalizeMethodName, &m_pSuppressFinalize));
         }
 
         if (!m_pSuppressFinalize)
