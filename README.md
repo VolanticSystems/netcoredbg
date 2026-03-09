@@ -14,6 +14,8 @@
 > - Relaxed assertion in `modules_sources.h` for NinjaTrader-compiled PDBs with overlapping method ranges
 >
 > All changes are `#ifdef WIN32` guarded. Linux/macOS builds are unaffected. See [DOTNET_FRAMEWORK_SUPPORT.md](DOTNET_FRAMEWORK_SUPPORT.md) for details.
+>
+> **Why a fork?** Samsung's netcoredbg repository does not accept external pull requests. This fork exists to maintain .NET Framework support independently.
 
 ---
 
